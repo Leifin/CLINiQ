@@ -1688,6 +1688,7 @@ textarea:focus {
 }
 
 .settings-theme-option {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 0.75rem;
@@ -1704,14 +1705,315 @@ textarea:focus {
 }
 
 .settings-theme-option:hover,
-.settings-theme-option.active {
+.settings-theme-option.active,
+.settings-theme-option:has(input:checked) {
     border-color: rgba(var(--cliniq-focus-rgb), 0.42);
     background: var(--cliniq-surface-low);
     box-shadow: 0 0 0 3px rgba(var(--cliniq-focus-rgb), 0.08);
 }
 
+/* ============================================================
+   FILE AND IMAGE PREVIEW MODAL
+   Shared by staff and patient interfaces.
+   ============================================================ */
+body.file-preview-open {
+    overflow: hidden;
+}
+
+.file-preview-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 14000;
+    display: grid;
+    place-items: center;
+    padding: 1.25rem;
+    background: rgba(15, 23, 42, 0.72);
+    backdrop-filter: blur(8px);
+}
+
+.file-preview-backdrop[hidden] {
+    display: none;
+}
+
+.file-preview-dialog {
+    display: flex;
+    flex-direction: column;
+    width: min(72rem, 96vw);
+    height: min(54rem, 92vh);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 1.25rem;
+    background: #fff;
+    box-shadow: 0 30px 80px rgba(15, 23, 42, 0.38);
+}
+
+.file-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.15rem;
+    border-bottom: 1px solid #e2e8f0;
+    background: #fff;
+}
+
+.file-preview-heading,
+.file-preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.file-preview-heading > .material-symbols-outlined {
+    display: grid;
+    flex: 0 0 auto;
+    width: 2.5rem;
+    height: 2.5rem;
+    place-items: center;
+    border-radius: 0.75rem;
+    background: var(--cliniq-surface-low, #edf8f0);
+    color: var(--cliniq-primary, #3f7d52);
+}
+
+.file-preview-eyebrow {
+    display: block;
+    margin-bottom: 0.1rem;
+    color: #94a3b8;
+    font-size: 0.62rem;
+    font-weight: 900;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.file-preview-header h2 {
+    max-width: min(48rem, 55vw);
+    margin: 0;
+    overflow: hidden;
+    color: #17261d;
+    font-size: 0.95rem;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-preview-download,
+.file-preview-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    min-height: 2.5rem;
+    border: 1px solid #dbe5de;
+    border-radius: 0.7rem;
+    background: #fff;
+    color: #315f40;
+    font-size: 0.78rem;
+    font-weight: 800;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.file-preview-download {
+    padding: 0.55rem 0.85rem;
+}
+
+.file-preview-close {
+    width: 2.5rem;
+    padding: 0;
+}
+
+.file-preview-download:hover,
+.file-preview-close:hover {
+    border-color: #9fc6aa;
+    background: #edf8f0;
+}
+
+.file-preview-download .material-symbols-outlined,
+.file-preview-close .material-symbols-outlined {
+    font-size: 1.15rem;
+}
+
+.file-preview-body {
+    display: grid;
+    flex: 1 1 auto;
+    min-height: 0;
+    place-items: center;
+    overflow: auto;
+    background: #e9eef2;
+}
+
+.file-preview-image {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 1rem;
+    object-fit: contain;
+}
+
+.file-preview-frame {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #fff;
+}
+
+@media (max-width: 640px) {
+    .file-preview-backdrop {
+        padding: 0.5rem;
+    }
+
+    .file-preview-dialog {
+        width: 100%;
+        height: 96vh;
+        border-radius: 1rem;
+    }
+
+    .file-preview-header {
+        padding: 0.75rem;
+    }
+
+    .file-preview-heading > .material-symbols-outlined,
+    .file-preview-download span,
+    .file-preview-eyebrow {
+        display: none;
+    }
+
+    .file-preview-download {
+        width: 2.5rem;
+        padding: 0;
+        font-size: 0;
+    }
+
+    .file-preview-download::after {
+        content: "↓";
+        font-size: 1.1rem;
+    }
+
+    .file-preview-header h2 {
+        max-width: 52vw;
+    }
+}
+
+.settings-logo-layout {
+    display: grid;
+    grid-template-columns: minmax(12rem, 0.7fr) minmax(0, 1.8fr);
+    gap: 1.25rem;
+    align-items: stretch;
+}
+
+.settings-logo-preview-card,
+.settings-logo-controls {
+    display: grid;
+    gap: 0.85rem;
+}
+
+.settings-logo-preview-card {
+    justify-items: center;
+    align-content: center;
+    min-height: 15rem;
+    border: 1px solid rgba(199, 220, 205, 0.75);
+    border-radius: 0.9rem;
+    background: #ffffff;
+    padding: 1.25rem;
+}
+
+.settings-logo-preview {
+    display: grid;
+    place-items: center;
+    width: 7rem;
+    height: 7rem;
+    overflow: hidden;
+    border: 1px solid var(--cliniq-outline);
+    border-radius: 1.35rem;
+    background: #ffffff;
+    box-shadow: 0 12px 28px rgba(var(--cliniq-shadow-rgb), 0.12);
+}
+
+.settings-logo-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    padding: 0.45rem;
+}
+
+.settings-logo-controls {
+    align-content: center;
+}
+
+.settings-logo-dropzone {
+    display: grid;
+    place-items: center;
+    gap: 0.5rem;
+    min-height: 10rem;
+    border: 2px dashed rgba(var(--cliniq-focus-rgb), 0.3);
+    border-radius: 1rem;
+    background: rgba(var(--cliniq-focus-rgb), 0.035);
+    color: #475569;
+    padding: 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
+}
+
+.settings-logo-dropzone:hover,
+.settings-logo-dropzone.is-dragging {
+    border-color: var(--cliniq-primary);
+    background: var(--cliniq-surface-low);
+}
+
+.settings-logo-dropzone.is-dragging {
+    transform: translateY(-2px);
+}
+
+.settings-logo-dropzone input {
+    display: none;
+}
+
+.settings-logo-dropzone .material-symbols-outlined {
+    color: var(--cliniq-primary);
+    font-size: 2.2rem;
+}
+
+.settings-logo-dropzone strong {
+    color: #17261d;
+    font-size: 0.9rem;
+}
+
+.settings-logo-dropzone span:last-child,
+.settings-logo-file-name {
+    color: #64748b;
+    font-size: 0.73rem;
+    font-weight: 700;
+}
+
+.settings-logo-file-name {
+    margin: 0;
+    min-height: 1rem;
+}
+
+@media (max-width: 760px) {
+    .settings-logo-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.settings-theme-option:has(input:focus-visible) {
+    outline: 3px solid rgba(var(--cliniq-focus-rgb), 0.2);
+    outline-offset: 2px;
+}
+
 .settings-theme-option input {
     position: absolute;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
     opacity: 0;
     pointer-events: none;
 }
@@ -1730,6 +2032,11 @@ textarea:focus {
 
 .settings-theme-swatch .material-symbols-outlined {
     font-size: 1rem;
+    opacity: 0;
+}
+
+.settings-theme-option:has(input:checked) .settings-theme-swatch .material-symbols-outlined {
+    opacity: 1;
 }
 
 .settings-profile-list {
@@ -2232,6 +2539,172 @@ textarea.record-sheet-field {
     min-height: 0;
 }
 
+.dashboard-appointments-card {
+    height: auto;
+    max-height: none;
+}
+
+.dashboard-day-schedule-section {
+    min-width: 0;
+}
+
+.dashboard-day-schedule-date {
+    margin: 0.2rem 0 0;
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.dashboard-schedule-placeholder-note {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.65rem;
+    padding: 0.65rem 0.8rem;
+    border: 1px dashed #cbd5e1;
+    border-radius: 0.75rem;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.dashboard-schedule-placeholder-note .material-symbols-outlined {
+    flex: 0 0 auto;
+    font-size: 1rem;
+}
+
+.dashboard-day-calendar {
+    height: min(36rem, 72vh);
+    min-height: 25rem;
+    overflow-y: auto;
+    overflow-x: hidden !important;
+    overscroll-behavior: contain;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.9rem;
+    background: #ffffff;
+}
+
+.dashboard-day-calendar-canvas {
+    position: relative;
+    height: 40.5rem;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    background: linear-gradient(90deg, #f8fafc 0, #f8fafc 5.1rem, #ffffff 5.1rem);
+}
+
+.dashboard-calendar-hour {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: grid;
+    grid-template-columns: 5.1rem minmax(0, 1fr);
+    align-items: center;
+    transform: translateY(-0.5px);
+    pointer-events: none;
+}
+
+.dashboard-calendar-hour time {
+    padding-right: 0.85rem;
+    color: #64748b;
+    font-size: 0.68rem;
+    font-weight: 800;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.dashboard-calendar-hour span {
+    height: 1px;
+    background: #e2e8f0;
+}
+
+.dashboard-calendar-events {
+    position: absolute;
+    inset: 0 0 0 5.1rem;
+}
+
+.dashboard-calendar-event {
+    position: absolute;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 2.8rem;
+    overflow: hidden;
+    padding: 0.38rem 0.65rem;
+    border: 1px solid color-mix(in srgb, var(--cliniq-primary) 28%, #cbd5e1);
+    border-left: 4px solid var(--cliniq-primary);
+    border-radius: 0.65rem;
+    background: color-mix(in srgb, var(--cliniq-primary) 10%, #ffffff);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+    color: #17261d;
+    line-height: 1.2;
+    transition: box-shadow 150ms ease, transform 150ms ease;
+}
+
+.dashboard-calendar-event:hover {
+    z-index: 2;
+    overflow: visible;
+    box-shadow: 0 7px 18px rgba(15, 23, 42, 0.16);
+    transform: translateY(-1px);
+}
+
+.dashboard-calendar-event.is-placeholder {
+    border-style: dashed;
+    opacity: 0.62;
+    box-shadow: none;
+}
+
+.dashboard-calendar-event-time {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+    color: var(--cliniq-primary);
+    font-size: 0.64rem;
+    font-weight: 900;
+    white-space: nowrap;
+}
+
+.dashboard-calendar-event-time .material-symbols-outlined {
+    font-size: 0.78rem;
+}
+
+.dashboard-calendar-event strong,
+.dashboard-calendar-event > span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-calendar-event strong {
+    margin-top: 0.15rem;
+    font-size: 0.78rem;
+}
+
+.dashboard-calendar-event > span {
+    margin-top: 0.1rem;
+    color: #64748b;
+    font-size: 0.65rem;
+    font-weight: 700;
+}
+
+.dashboard-calendar-sample-badge {
+    margin-left: 0.25rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.82);
+    color: #64748b;
+    font-size: 0.54rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+
+
 .dashboard-visitor-grid-wrap {
     display: flex;
     min-height: 0;
@@ -2282,6 +2755,10 @@ textarea.record-sheet-field {
     .dashboard-activity-card {
         height: clamp(34rem, calc(100vh - 13rem), 42rem);
         max-height: none;
+    }
+
+    .dashboard-appointments-card {
+        height: auto;
     }
 }
 
@@ -2413,6 +2890,7 @@ textarea.record-sheet-field {
 }
 
 .pagination a,
+.pagination button,
 .pagination span {
     display: inline-flex;
     align-items: center;
@@ -2425,13 +2903,18 @@ textarea.record-sheet-field {
     font-weight: 700;
     text-decoration: none;
     transition: all 0.15s ease;
+    border: 0;
+    background: transparent;
 }
 
-.pagination a {
+.pagination a,
+.pagination button {
     color: #64748b;
+    cursor: pointer;
 }
 
-.pagination a:hover {
+.pagination a:hover,
+.pagination button:hover:not(:disabled) {
     background: #f1f5f9;
     color: #1e293b;
 }
@@ -2444,6 +2927,28 @@ textarea.record-sheet-field {
 .pagination .page-disabled {
     color: #cbd5e1;
     pointer-events: none;
+}
+
+#recentPatientAccounts .pagination,
+#patientsPagination {
+    gap: 0.55rem;
+    padding: 1.35rem 1.5rem;
+}
+
+#recentPatientAccounts .pagination button,
+#patientsPagination button {
+    min-width: 2.5rem;
+    height: 2.5rem;
+    padding: 0 0.85rem;
+    border-radius: 9999px;
+    line-height: 1;
+}
+
+#recentPatientAccounts .pagination .page-active,
+#patientsPagination .page-active {
+    background: var(--cliniq-primary);
+    color: #ffffff;
+    box-shadow: 0 5px 14px rgba(var(--cliniq-focus-rgb), 0.2);
 }
 
 /* ============================================================
@@ -2552,6 +3057,11 @@ textarea.record-sheet-field {
     min-height: 340px;
 }
 
+.cliniq-ag-grid-patient-registry {
+    height: 888px;
+    min-height: 888px;
+}
+
 .cliniq-ag-grid-fill {
     height: 100%;
     min-height: 0;
@@ -2616,6 +3126,31 @@ textarea.record-sheet-field {
 .cliniq-ag-grid .ag-cell p,
 .cliniq-ag-grid .ag-cell span:not(.material-symbols-outlined) {
     overflow-wrap: anywhere;
+}
+
+.cliniq-cell-overflow-tooltip {
+    position: fixed;
+    z-index: 10050;
+    width: max-content;
+    max-width: min(32rem, calc(100vw - 1rem));
+    max-height: min(18rem, 45vh);
+    overflow: hidden auto;
+    border: 1px solid rgba(199, 220, 205, 0.95);
+    border-radius: 0.8rem;
+    background: #ffffff;
+    box-shadow: 0 16px 38px rgba(15, 23, 42, 0.18);
+    color: #17261d;
+    padding: 0.7rem 0.85rem;
+    font-size: 0.78rem;
+    font-weight: 750;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    pointer-events: none;
+    white-space: normal;
+}
+
+.cliniq-cell-overflow-tooltip[hidden] {
+    display: none;
 }
 
 .cliniq-ag-grid .ag-paging-panel {
@@ -2784,6 +3319,298 @@ textarea.record-sheet-field {
     line-height: 1.25;
 }
 
+.appointment-week-scroll {
+    overflow-x: auto;
+    padding: 1.25rem;
+    scrollbar-gutter: stable;
+}
+
+.cliniq-drag-scroll {
+    cursor: grab;
+}
+
+.cliniq-drag-scroll.cliniq-is-dragging,
+body.cliniq-drag-scroll-active,
+body.cliniq-drag-scroll-active * {
+    cursor: grabbing !important;
+    user-select: none !important;
+}
+
+.appointment-availability-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 22.5rem;
+    min-width: 0;
+}
+
+#clinic-availability {
+    scroll-margin-top: 1.5rem;
+}
+
+.appointment-availability-calendar-panel {
+    min-width: 0;
+    border-right: 1px solid #e2e8f0;
+}
+
+.appointment-availability-sidebar {
+    display: grid;
+    align-content: start;
+    min-width: 0;
+    background: #fbfdff;
+}
+
+.appointment-availability-form-card {
+    padding: 1.25rem;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.appointment-availability-block-list {
+    min-width: 0;
+}
+
+.appointment-week-range {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem 0;
+}
+
+.appointment-week-range strong {
+    color: #17261d;
+    font-size: 0.9rem;
+    font-weight: 900;
+}
+
+.appointment-week-range span {
+    color: #64748b;
+    font-size: 0.7rem;
+    font-weight: 700;
+}
+
+.appointment-week-sample-note {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 1rem 1.25rem 0;
+    padding: 0.7rem 0.85rem;
+    border: 1px dashed #cbd5e1;
+    border-radius: 0.75rem;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.appointment-week-sample-note .material-symbols-outlined {
+    flex: 0 0 auto;
+    font-size: 1rem;
+}
+
+.appointment-week-calendar {
+    display: grid;
+    grid-template-columns: 4.75rem repeat(6, minmax(8.5rem, 1fr));
+    min-width: 58rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.9rem;
+    overflow: hidden;
+    background: #ffffff;
+}
+
+.appointment-week-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    min-height: 4.2rem;
+    padding: 0.65rem;
+    border-left: 1px solid #e2e8f0;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+    color: #64748b;
+}
+
+.appointment-week-header span {
+    font-size: 0.63rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.appointment-week-header strong {
+    color: #17261d;
+    font-size: 0.86rem;
+    font-weight: 900;
+}
+
+.appointment-week-header.is-today {
+    background: var(--cliniq-primary-fixed);
+}
+
+.appointment-week-header.is-today strong,
+.appointment-week-header.is-today span {
+    color: var(--cliniq-primary-hover);
+}
+
+.appointment-week-time-heading {
+    border-left: 0;
+    font-size: 0.65rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.appointment-week-time-column,
+.appointment-week-day-column {
+    position: relative;
+    height: 40.5rem;
+}
+
+.appointment-week-time-column {
+    background: #f8fafc;
+}
+
+.appointment-week-time-column time {
+    position: absolute;
+    right: 0.7rem;
+    transform: translateY(-50%);
+    color: #64748b;
+    font-size: 0.66rem;
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.appointment-week-time-column time:first-child {
+    transform: translateY(0);
+}
+
+.appointment-week-time-column time:last-child {
+    transform: translateY(-100%);
+}
+
+.appointment-week-day-column {
+    overflow: hidden;
+    border-left: 1px solid #e2e8f0;
+    background: #ffffff;
+    cursor: crosshair;
+    outline: none;
+}
+
+.appointment-week-day-column:hover,
+.appointment-week-day-column:focus-visible {
+    background: color-mix(in srgb, var(--cliniq-primary) 3%, #ffffff);
+}
+
+.appointment-week-day-column.is-today {
+    background: color-mix(in srgb, var(--cliniq-primary) 4%, #ffffff);
+}
+
+.appointment-week-hour-cell {
+    position: absolute;
+    left: 0;
+    right: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid #dbe3ec;
+    border-radius: 0;
+    background: rgba(255, 255, 255, 0.46);
+    cursor: pointer;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.appointment-week-hour-cell:first-of-type {
+    border-top: 1px solid #dbe3ec;
+}
+
+.appointment-week-hour-cell:hover,
+.appointment-week-hour-cell:focus-visible {
+    z-index: 1;
+    background: color-mix(in srgb, var(--cliniq-primary) 9%, #ffffff);
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--cliniq-primary) 34%, transparent);
+    outline: none;
+}
+
+.appointment-week-block {
+    position: absolute;
+    z-index: 2;
+    left: 0.3rem;
+    right: 0.3rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 2rem;
+    overflow: hidden;
+    padding: 0.35rem 0.45rem;
+    border: 1px solid #fca5a5;
+    border-left: 4px solid #dc2626;
+    border-radius: 0.55rem;
+    background: #fff1f2;
+    box-shadow: 0 2px 7px rgba(127, 29, 29, 0.1);
+    color: #991b1b;
+    cursor: pointer;
+}
+
+.appointment-week-block:hover {
+    z-index: 3;
+    overflow: visible;
+    box-shadow: 0 7px 16px rgba(127, 29, 29, 0.18);
+}
+
+.appointment-week-block.is-all-day {
+    justify-content: flex-start;
+    padding-top: 0.75rem;
+    background: repeating-linear-gradient(-45deg, #fff1f2, #fff1f2 8px, #ffe4e6 8px, #ffe4e6 16px);
+}
+
+.appointment-week-block.is-placeholder {
+    border-style: dashed;
+    opacity: 0.58;
+    box-shadow: none;
+    cursor: default;
+}
+
+.appointment-week-sample-badge {
+    display: inline-block;
+    margin-left: 0.3rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.86);
+    color: #64748b;
+    font-size: 0.5rem;
+    letter-spacing: 0.05em;
+    line-height: 1.1;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+
+.appointment-week-block strong,
+.appointment-week-block span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.appointment-week-block strong {
+    font-size: 0.68rem;
+    font-weight: 900;
+}
+
+.appointment-week-block span {
+    margin-top: 0.15rem;
+    font-size: 0.61rem;
+    font-weight: 700;
+}
+
+.appointment-week-block .appointment-week-sample-badge {
+    display: inline-block;
+    margin: 0 0 0 0.3rem;
+    padding: 0.1rem 0.3rem;
+    font-size: 0.5rem;
+    line-height: 1.1;
+}
+
 .appointment-block-row {
     display: flex;
     align-items: center;
@@ -2874,5 +3701,25 @@ textarea.record-sheet-field {
     .appointment-calendar-weekday,
     .appointment-calendar-day.is-empty {
         display: none;
+    }
+
+    .appointment-week-scroll {
+        padding: 0.85rem;
+    }
+
+    .appointment-availability-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .appointment-availability-calendar-panel {
+        border-right: 0;
+        border-bottom: 1px solid #e2e8f0;
+    }
+
+    .appointment-week-range {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.2rem;
+        padding: 0.85rem 0.85rem 0;
     }
 }

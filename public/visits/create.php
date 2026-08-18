@@ -1,15 +1,12 @@
 <?php
 
 require_once __DIR__ . '/../../app/helpers/view.php';
-require_once __DIR__ . '/../../app/services/VisitWorkflow.php';
-require_once __DIR__ . '/../../app/services/InventoryWorkflow.php';
+require_once __DIR__ . '/../../app/services/CliniqVisitWorkflow.php';
 require_login();
-ensure_visit_workflow_schema();
-ensure_inventory_workflow_schema();
 
-$patients = db()->query('SELECT id, student_number, first_name, last_name, course_section, sex FROM patients ORDER BY last_name, first_name')->fetchAll();
-$medicineInventory = visit_medicine_inventory_options();
-$equipmentInventory = visit_equipment_inventory_options();
+$patients = cliniq_visit_patients();
+$medicineInventory = cliniq_inventory_available_medicines();
+$equipmentInventory = [];
 $preselectedPatientId = (int) ($_GET['patient_id'] ?? 0);
 $preselectedPatient = null;
 foreach ($patients as $patient) {
@@ -20,100 +17,59 @@ foreach ($patients as $patient) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $db = db();
     try {
-        $postedStudentNumber = trim($_POST['student_number'] ?? '');
+        $postedStudentNumber = trim($_POST['id_number'] ?? '');
         $patientId = 0;
         if ($postedStudentNumber !== '') {
-            if (!is_valid_student_id($postedStudentNumber)) {
-                throw new InvalidArgumentException(student_id_format_message());
+            if (!is_valid_id_number($postedStudentNumber)) {
+                throw new InvalidArgumentException(id_number_validation_message());
             }
 
-            $patientCheck = $db->prepare('SELECT id FROM patients WHERE student_number = ? LIMIT 1');
-            $patientCheck->execute([$postedStudentNumber]);
-            $patientId = (int) ($patientCheck->fetchColumn() ?: 0);
+            $patient = cliniq_visit_patient_by_id_number($postedStudentNumber);
+            $patientId = (int) ($patient['person_id'] ?? 0);
         } else {
             $patientId = (int) ($_POST['patient_id'] ?? 0);
-            $patientCheck = $db->prepare('SELECT id FROM patients WHERE id = ? LIMIT 1');
-            $patientCheck->execute([$patientId]);
-            $patientId = (int) ($patientCheck->fetchColumn() ?: 0);
+            if (!cliniq_visit_patient_exists($patientId)) {
+                $patientId = 0;
+            }
         }
 
         if ($patientId <= 0) {
-            throw new InvalidArgumentException('Please enter a valid student ID before saving the visit.');
+            throw new InvalidArgumentException('Please enter a valid ID number before saving the visit.');
         }
 
         $actionTaken = trim($_POST['action_taken'] ?? '');
-        $status = normalize_visit_status($_POST['status'] ?? 'Active', 'Active');
-        if ($status === 'Unaddressed' || $status === 'Cancelled') {
-            $status = 'Active';
-        }
         $purpose = normalize_visit_purpose($_POST['visit_purpose'] ?? null);
         $referralType = trim($_POST['referral_type'] ?? '');
         if ($referralType === 'None') {
             $referralType = '';
         }
-        $dispensingRequest = visit_dispensing_request($_POST);
-
-        $db->beginTransaction();
-        $stmt = $db->prepare(
-            'INSERT INTO clinic_visits (patient_id, visit_datetime, chief_complaint, symptoms, temperature, blood_pressure, pulse_rate, status, visit_purpose, visit_source, action_taken, recorded_by, attended_by)
-             VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        );
-        $stmt->execute([
-            $patientId,
-            trim($_POST['chief_complaint'] ?? ''),
-            trim($_POST['symptoms'] ?? ''),
-            $_POST['temperature'] ?: null,
-            trim($_POST['blood_pressure'] ?? ''),
-            $_POST['pulse_rate'] ?: null,
-            $status,
-            $purpose,
-            'Staff Recorded',
-            $actionTaken ?: null,
-            current_user()['id'],
-            current_user()['id'],
-        ]);
-        $visitId = (int) $db->lastInsertId();
-
-        $borrower = visit_patient_borrower($db, $patientId);
-        $dispensed = process_visit_inventory_request($db, $dispensingRequest, $borrower['name'], $borrower['identifier']);
-        $remarks = trim($_POST['remarks'] ?? '');
-        $entry = [
-            'symptoms_note' => trim($_POST['symptoms'] ?? ''),
+        $staffPersonId = cliniq_visit_staff_person_id();
+        $dispensings = cliniq_inventory_dispensing_rows($_POST);
+        $visitId = cliniq_visit_create([
+            'patient_person_id' => $patientId,
+            'chief_complaint' => trim($_POST['chief_complaint'] ?? ''),
+            'status' => 'Active',
+            'visit_purpose' => $purpose,
+            'visit_source' => 'Staff Recorded',
+            'action_taken' => $actionTaken,
+            'recorded_by_person_id' => $staffPersonId,
+            'attended_by_person_id' => $staffPersonId,
+        ], [
+            'symptoms' => trim($_POST['symptoms'] ?? ''),
             'diagnosis' => trim($_POST['diagnosis'] ?? ''),
-            'management_treatment' => $actionTaken,
-            'referral_type' => $referralType,
-            'remarks' => $remarks,
-        ];
+            'treatment' => $actionTaken,
+            'referral' => $referralType,
+            'remarks' => trim($_POST['remarks'] ?? ''),
+        ], [
+            'temperature' => $_POST['temperature'] ?? '',
+            'blood_pressure' => trim($_POST['blood_pressure'] ?? ''),
+            'pulse_rate' => $_POST['pulse_rate'] ?? '',
+        ], $dispensings);
 
-        if (treatment_entry_has_content($entry) || $dispensed) {
-            $treatmentStmt = $db->prepare(
-                'INSERT INTO visit_treatment_entries (visit_id, symptoms_note, diagnosis, management_treatment, referral_type, remarks, dispensed_inventory_item_id, dispensed_quantity, created_by)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            );
-            $firstDispensed = $dispensed[0] ?? [];
-            $treatmentStmt->execute([
-                $visitId,
-                $entry['symptoms_note'] ?: null,
-                $entry['diagnosis'] ?: null,
-                $entry['management_treatment'] ?: null,
-                $entry['referral_type'] ?: null,
-                $entry['remarks'] ?: null,
-                $firstDispensed['item_id'] ?? null,
-                $firstDispensed['quantity'] ?? null,
-                current_user()['id'],
-            ]);
-            save_visit_treatment_dispensings($db, (int) $db->lastInsertId(), $visitId, $dispensed);
-        }
-
-        $db->commit();
-        flash_message('success', $dispensed ? 'Manual visit recorded and inventory updated.' : 'Manual visit recorded.');
+        flash_message('success', 'Manual visit recorded in Cliniq_db.');
         header('Location: view.php?id=' . $visitId . '&from=logbook');
     } catch (Throwable $e) {
-        if ($db->inTransaction()) {
-            $db->rollBack();
-        }
         flash_message($e instanceof InvalidArgumentException ? 'warning' : 'error', $e->getMessage());
         header('Location: create.php' . ((int) ($_POST['patient_id'] ?? 0) > 0 ? '?patient_id=' . (int) $_POST['patient_id'] : ''));
     }
@@ -126,7 +82,7 @@ render_header('Record Visit');
 render_clinic_command_header(
     'Manual Nurse Station Flow',
     'Manual Record Visit',
-    'Record a walk-in visit directly with vitals, treatment, dispensing, and clinical notes.'
+    'Record a walk-in visit directly with vitals, treatment, and clinical notes.'
 );
 ?>
 
@@ -138,28 +94,28 @@ render_clinic_command_header(
                 Patient Information
             </h2>
             <div>
-                <label class="clinic-label" for="studentIdLookup">Student ID</label>
-                <input class="record-sheet-field px-4" id="studentIdLookup" name="student_number" list="studentIdOptions" placeholder="00-00000" value="<?= e($preselectedPatient['student_number'] ?? '') ?>" autocomplete="off" data-student-id-format required>
+                <label class="clinic-label" for="studentIdLookup">ID Number</label>
+                <input class="record-sheet-field px-4" id="studentIdLookup" name="id_number" list="studentIdOptions" placeholder="Enter ID number" value="<?= e($preselectedPatient['id_number'] ?? '') ?>" autocomplete="off" data-id-number-format required>
                 <input type="hidden" name="patient_id" id="patientIdInput" value="<?= $preselectedPatient ? (int) $preselectedPatient['id'] : '' ?>">
                 <datalist id="studentIdOptions">
                     <?php foreach ($patients as $patient): ?>
                         <?php $patientName = trim($patient['last_name'] . ', ' . $patient['first_name']); ?>
-                        <option value="<?= e($patient['student_number']) ?>"><?= e($patientName) ?></option>
+                        <option value="<?= e($patient['id_number']) ?>"><?= e($patientName) ?></option>
                     <?php endforeach; ?>
                 </datalist>
-                <div id="patientLookupStatus" class="patient-lookup-status mt-2">Enter a student ID to load patient details.</div>
+                <div id="patientLookupStatus" class="patient-lookup-status mt-2">Enter a ID number to load patient details.</div>
             </div>
             <div>
                 <label class="clinic-label">Student Name</label>
-                <input class="record-sheet-field px-4" id="patientNameDisplay" value="<?= $preselectedPatient ? e(trim($preselectedPatient['first_name'] . ' ' . $preselectedPatient['last_name'])) : 'Enter student ID' ?>" readonly>
+                <input class="record-sheet-field px-4" id="patientNameDisplay" value="<?= $preselectedPatient ? e(trim($preselectedPatient['first_name'] . ' ' . $preselectedPatient['last_name'])) : 'Enter ID number' ?>" readonly>
             </div>
             <div>
                 <label class="clinic-label">Course / Department</label>
-                <input class="record-sheet-field px-4" id="patientCourseDisplay" value="<?= $preselectedPatient ? e($preselectedPatient['course_section'] ?: 'Not specified') : 'Enter student ID' ?>" readonly>
+                <input class="record-sheet-field px-4" id="patientCourseDisplay" value="<?= $preselectedPatient ? e($preselectedPatient['course_section'] ?: 'Not specified') : 'Enter ID number' ?>" readonly>
             </div>
             <div>
                 <label class="clinic-label">Sex</label>
-                <input class="record-sheet-field px-4" id="patientSexDisplay" value="<?= $preselectedPatient ? e($preselectedPatient['sex'] ?: 'Not specified') : 'Enter student ID' ?>" readonly>
+                <input class="record-sheet-field px-4" id="patientSexDisplay" value="<?= $preselectedPatient ? e($preselectedPatient['sex'] ?: 'Not specified') : 'Enter ID number' ?>" readonly>
             </div>
         </section>
 
@@ -180,14 +136,6 @@ render_clinic_command_header(
             <div>
                 <label class="clinic-label">Chief Complaint</label>
                 <textarea class="record-sheet-field p-4" name="chief_complaint" rows="3" placeholder="Patient's main concern..." required></textarea>
-            </div>
-            <div>
-                <label class="clinic-label">Visit Status</label>
-                <select class="record-sheet-field px-4" name="status">
-                    <?php foreach (array_filter(visit_statuses(), fn($status) => $status !== 'Unaddressed') as $status): ?>
-                        <option value="<?= e($status) ?>"><?= e($status) ?></option>
-                    <?php endforeach; ?>
-                </select>
             </div>
             <div>
                 <label class="clinic-label">Time of Arrival</label>
@@ -243,19 +191,19 @@ render_clinic_command_header(
             <span class="material-symbols-outlined text-primary text-[19px]">inventory_2</span>
             Inventory & Dispensing
         </h2>
+        <p class="settings-help mb-4">Optional medicines are saved with the treatment entry and deducted from Cliniq_db stock.</p>
         <div class="space-y-3" data-dispensing-list>
             <div class="grid grid-cols-1 md:grid-cols-[0.7fr_1.6fr_0.55fr_auto] gap-4 items-end" data-dispensing-row>
                 <div>
                     <label class="clinic-label">Type</label>
-                    <select class="record-sheet-field px-4 js-dispensing-type" name="dispensing_type[]">
+                    <select class="record-sheet-field px-4 js-dispensing-type" name="dispensing_type[]" disabled>
                         <option value="Medicine">Medicine</option>
-                        <option value="Equipment">Equipment</option>
                     </select>
                 </div>
                 <div>
-                    <label class="clinic-label">Medicine / Equipment</label>
+                    <label class="clinic-label">Medicine</label>
                     <select class="record-sheet-field px-4 js-visit-inventory-item" name="dispensed_inventory_item_id[]">
-                        <option value="" data-type="Medicine">No item selected</option>
+                        <option value="" data-type="Medicine">No medicine selected</option>
                         <?php foreach ($medicineInventory as $medicine): ?>
                             <option value="<?= (int) $medicine['id'] ?>" data-type="Medicine" <?= (int) $medicine['quantity'] <= 0 ? 'disabled' : '' ?>>
                                 <?= e($medicine['item_name']) ?> (<?= (int) $medicine['quantity'] ?> <?= e($medicine['unit']) ?>)
@@ -272,7 +220,7 @@ render_clinic_command_header(
                     <label class="clinic-label">Quantity</label>
                     <input class="record-sheet-field px-4" name="dispensed_quantity[]" type="number" min="1" placeholder="0">
                 </div>
-                <button type="button" class="btn btn-ghost js-remove-dispensing-row" title="Remove item" aria-label="Remove item">
+                <button type="button" class="btn btn-ghost js-remove-dispensing-row" title="Remove medicine" aria-label="Remove medicine">
                     <span class="material-symbols-outlined text-[18px]">delete</span>
                 </button>
             </div>
@@ -281,7 +229,7 @@ render_clinic_command_header(
             <span class="material-symbols-outlined text-[18px]">add</span>
             Add Item
         </button>
-        <p class="settings-help mt-3 mb-0">Add multiple rows to dispense any combination of medicines and equipment.</p>
+        <p class="settings-help mt-3 mb-0">Equipment borrowing is recorded separately in Inventory &amp; Tracking.</p>
     </section>
 
     <section class="clinic-card p-6">
@@ -321,7 +269,7 @@ render_clinic_command_header(
                     <span class="material-symbols-outlined">cancel</span>
                     Cancel
                 </a>
-                <button class="btn btn-primary" data-confirm-submit data-confirm-type="primary" data-confirm-title="Save this manual visit?" data-confirm-message="This will create a staff-recorded visit and update inventory for any dispensed medicines or equipment." data-confirm-toast="Saving visit...">
+                <button class="btn btn-primary" data-confirm-submit data-confirm-type="primary" data-confirm-title="Save this manual visit?" data-confirm-message="This will create the visit and deduct any selected medicine from Cliniq_db inventory." data-confirm-toast="Saving visit...">
                     <span class="material-symbols-outlined text-[18px]">save</span>
                     Save Visit
                 </button>
@@ -334,7 +282,7 @@ render_clinic_command_header(
 const visitPatients = <?= json_encode(array_map(static function (array $patient): array {
     return [
         'id' => (int) $patient['id'],
-        'studentNumber' => $patient['student_number'],
+        'studentNumber' => $patient['id_number'],
         'name' => trim($patient['first_name'] . ' ' . $patient['last_name']),
         'course' => $patient['course_section'] ?: 'Not specified',
         'sex' => $patient['sex'] ?: 'Not specified',
@@ -363,11 +311,11 @@ function setLookupStatus(message, state = '') {
     patientLookupStatus.classList.toggle('is-missing', state === 'missing');
 }
 
-function clearPatientLookup(message = 'Enter a student ID to load patient details.', state = '') {
+function clearPatientLookup(message = 'Enter a ID number to load patient details.', state = '') {
     patientIdInput.value = '';
-    patientNameDisplay.value = 'Enter student ID';
-    patientCourseDisplay.value = 'Enter student ID';
-    patientSexDisplay.value = 'Enter student ID';
+    patientNameDisplay.value = 'Enter ID number';
+    patientCourseDisplay.value = 'Enter ID number';
+    patientSexDisplay.value = 'Enter ID number';
     setLookupStatus(message, state);
 }
 
@@ -384,7 +332,7 @@ function updatePatientLookup() {
 
     const patient = visitPatientsByStudentNumber.get(formatted);
     if (!patient) {
-        clearPatientLookup(formatted.length >= 8 ? 'No patient found for this student ID.' : 'Continue typing the student ID.', formatted.length >= 8 ? 'missing' : '');
+        clearPatientLookup(formatted.length >= 8 ? 'No patient found for this ID number.' : 'Continue typing the ID number.', formatted.length >= 8 ? 'missing' : '');
         return;
     }
 
@@ -404,7 +352,7 @@ document.getElementById('visitForm')?.addEventListener('submit', (event) => {
     if (!patientIdInput.value) {
         event.preventDefault();
         studentIdLookup.focus();
-        setLookupStatus('Enter a valid student ID before saving the visit.', 'missing');
+        setLookupStatus('Enter a valid ID number before saving the visit.', 'missing');
     }
 });
 

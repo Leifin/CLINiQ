@@ -8,7 +8,7 @@ require_once __DIR__ . '/../app/config/env.php';
 require_once __DIR__ . '/../app/config/database.php';
 require_once __DIR__ . '/../app/helpers/student_id.php';
 
-$db = db();
+$db = auth_db();
 $databaseName = env_value('DB_NAME', 'cliniq');
 $oldStudentIdPattern = '/20(\d{2})-(\d{5})/';
 
@@ -125,4 +125,4 @@ if ($failedRows) {
     exit(1);
 }
 
-echo 'Student ID format is now standardized as ' . STUDENT_ID_FORMAT_LABEL . ".\n";
+echo 'ID Number format is now standardized as ' . ID_NUMBER_FORMAT_LABEL . ".\n";

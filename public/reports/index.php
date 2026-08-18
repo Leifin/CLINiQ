@@ -1,30 +1,35 @@
 <?php
 
 require_once __DIR__ . '/../../app/helpers/view.php';
-require_once __DIR__ . '/../../app/services/VisitWorkflow.php';
+require_once __DIR__ . '/../../app/services/CliniqVisitWorkflow.php';
+require_once __DIR__ . '/../../app/services/AlertWorkflow.php';
+require_once __DIR__ . '/../../app/services/SystemReport.php';
+require_once __DIR__ . '/../../app/services/SystemReportRenderer.php';
 require_login();
+ensure_alert_workflow_schema();
 
 // ── Date range filter ───────────────────────────────────────
-$dateFrom = $_GET['from'] ?? date('Y-m-01');
-$dateTo = $_GET['to'] ?? date('Y-m-d');
+$dateFrom = normalize_system_report_date($_GET['from'] ?? null, date('Y-m-01'));
+$dateTo = normalize_system_report_date($_GET['to'] ?? null, date('Y-m-d'));
+$visitDb = cliniq_visit_db();
 
 $stats = [
-    'visits_today'   => db()->query('SELECT COUNT(*) AS total FROM clinic_visits WHERE DATE(visit_datetime) = CURDATE()')->fetch()['total'] ?? 0,
+    'visits_today'   => $visitDb->query('SELECT COUNT(*) AS total FROM visits WHERE DATE(visit_datetime) = CURDATE()')->fetch()['total'] ?? 0,
     'visits_range'   => 0,
-    'alerts_pending' => db()->query("SELECT COUNT(*) AS total FROM nurse_alerts WHERE status = 'Pending'")->fetch()['total'] ?? 0,
-    'low_stock'      => db()->query('SELECT COUNT(*) AS total FROM inventory_items WHERE quantity <= reorder_level')->fetch()['total'] ?? 0,
-    'total_patients'  => db()->query('SELECT COUNT(*) AS total FROM patients')->fetch()['total'] ?? 0,
+    'alerts_pending' => auth_db()->query("SELECT COUNT(*) AS total FROM nurse_alerts WHERE status = 'Pending'")->fetch()['total'] ?? 0,
+    'low_stock'      => cliniq_inventory_db()->query('SELECT COUNT(*) AS total FROM inventory_items WHERE is_active = 1 AND quantity <= reorder_level')->fetch()['total'] ?? 0,
+    'total_patients'  => $visitDb->query('SELECT COUNT(*) AS total FROM patients')->fetch()['total'] ?? 0,
 ];
 
 // Visits in date range
-$rangeStmt = db()->prepare('SELECT COUNT(*) AS total FROM clinic_visits WHERE DATE(visit_datetime) BETWEEN ? AND ?');
+$rangeStmt = $visitDb->prepare('SELECT COUNT(*) AS total FROM visits WHERE DATE(visit_datetime) BETWEEN ? AND ?');
 $rangeStmt->execute([$dateFrom, $dateTo]);
 $stats['visits_range'] = (int)$rangeStmt->fetch()['total'];
 
 // Common complaints in range
-$complaints = db()->prepare("
+$complaints = $visitDb->prepare("
     SELECT chief_complaint, COUNT(*) AS total
-    FROM clinic_visits
+    FROM visits
     WHERE DATE(visit_datetime) BETWEEN ? AND ?
     GROUP BY chief_complaint
     ORDER BY total DESC, chief_complaint ASC
@@ -35,9 +40,9 @@ $complaints = $complaints->fetchAll();
 $maxComplaint = $complaints ? max(array_column($complaints, 'total')) : 1;
 
 // Visit status distribution
-$statusDist = db()->prepare("
+$statusDist = $visitDb->prepare("
     SELECT COALESCE(status, 'Unaddressed') AS status, COUNT(*) AS total
-    FROM clinic_visits
+    FROM visits
     WHERE DATE(visit_datetime) BETWEEN ? AND ?
     GROUP BY COALESCE(status, 'Unaddressed')
     ORDER BY FIELD(COALESCE(status, 'Unaddressed'), 'Unaddressed', 'Active', 'Completed', 'Cancelled')
@@ -46,16 +51,17 @@ $statusDist->execute([$dateFrom, $dateTo]);
 $statusDist = $statusDist->fetchAll();
 
 // Monthly trend (last 6 months)
-$monthlyTrend = db()->query("
+$monthlyTrend = $visitDb->query("
     SELECT DATE_FORMAT(visit_datetime, '%Y-%m') AS month_key,
            DATE_FORMAT(visit_datetime, '%b %Y') AS month_label,
            COUNT(*) AS total
-    FROM clinic_visits
+    FROM visits
     WHERE visit_datetime >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
     GROUP BY month_key, month_label
     ORDER BY month_key ASC
 ")->fetchAll();
 $maxMonthly = $monthlyTrend ? max(array_column($monthlyTrend, 'total')) : 1;
+$mainSystemReport = build_system_report($dateFrom, $dateTo, []);
 
 render_header('Reports');
 ?>
@@ -64,27 +70,28 @@ render_header('Reports');
 <?php render_clinic_command_header(
     'Reports',
     'Reports & Analytics',
-    'Clinic summaries, visit trends, alerts, and inventory warnings.',
-    '<a class="btn btn-primary text-decoration-none" href="export.php?from=' . e($dateFrom) . '&to=' . e($dateTo) . '"><span class="material-symbols-outlined text-[20px]">download</span>Export CSV</a>'
+    'Build, preview, and export consolidated analytics across every CLINiQ module.',
+    '<a class="btn btn-outline text-decoration-none" href="export.php?from=' . e($dateFrom) . '&to=' . e($dateTo) . '"><span class="material-symbols-outlined text-[20px]">table_view</span>Export Visit CSV</a>'
 ); ?>
 
 <!-- ═══ Date Range Filter ═══ -->
-<form method="get" class="clinic-card p-4 flex flex-col sm:flex-row items-end gap-4">
-    <div class="flex-1">
-        <label class="clinic-label">From</label>
-        <input class="clinic-input" type="date" name="from" value="<?= e($dateFrom) ?>">
+<form method="get" class="clinic-card overflow-hidden" data-no-ajax="true">
+    <div class="p-6 border-b border-slate-100">
+        <h2 class="font-headline text-xl font-extrabold text-[#17261d] mb-1">System Analytics Period</h2>
+        <p class="text-xs font-bold text-slate-500 mb-0">All available module graphs are shown below. Choose which sections to export after opening Preview.</p>
     </div>
-    <div class="flex-1">
-        <label class="clinic-label">To</label>
-        <input class="clinic-input" type="date" name="to" value="<?= e($dateTo) ?>">
+    <div class="p-6 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_auto] items-end gap-4">
+        <div><label class="clinic-label" for="reportFrom">From</label><input class="clinic-input" id="reportFrom" type="date" name="from" value="<?= e($dateFrom) ?>" required></div>
+        <div><label class="clinic-label" for="reportTo">To</label><input class="clinic-input" id="reportTo" type="date" name="to" value="<?= e($dateTo) ?>" required></div>
+        <div class="flex flex-col sm:flex-row gap-3">
+            <button class="btn btn-outline justify-center" type="submit" formaction="index.php"><span class="material-symbols-outlined text-[18px]">filter_list</span>Apply</button>
+            <button class="btn btn-primary justify-center" type="submit" formaction="preview.php"><span class="material-symbols-outlined text-[18px]">preview</span>Preview Report</button>
+        </div>
     </div>
-    <button class="btn btn-outline" type="submit">
-        <span class="material-symbols-outlined text-[18px]">filter_list</span> Apply
-    </button>
 </form>
 
 <!-- ═══ Stats Cards ═══ -->
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
     <div class="bg-white p-6 rounded-[2rem] border border-outline-variant/20 shadow-sm">
         <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Visits in Range</p>
         <p class="text-3xl font-headline font-extrabold text-slate-800 mt-2"><?= (int) $stats['visits_range'] ?></p>
@@ -102,6 +109,10 @@ render_header('Reports');
         <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Patients</p>
         <p class="text-3xl font-headline font-extrabold text-slate-800 mt-2"><?= (int) $stats['total_patients'] ?></p>
     </div>
+    <a href="<?= app_url('inventory/index.php?tab=medicine&highlight=low-stock') ?>" class="bg-white p-6 rounded-[2rem] border border-outline-variant/20 shadow-sm text-decoration-none">
+        <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Low Stock</p>
+        <p class="text-3xl font-headline font-extrabold text-slate-800 mt-2"><?= (int) $stats['low_stock'] ?></p>
+    </a>
 </div>
 
 <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -192,5 +203,15 @@ render_header('Reports');
         <?php endif; ?>
     </div>
 </section>
+
+<section class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 pt-2">
+    <div>
+        <p class="text-[10px] font-black uppercase tracking-[0.16em] text-primary mb-1">Complete Analytics</p>
+        <h2 class="font-headline text-2xl font-extrabold text-[#17261d] mb-1">All System Graphs</h2>
+        <p class="text-xs font-bold text-slate-500 mb-0">Live summaries from every reporting module for <?= e(date('M j, Y', strtotime($dateFrom))) ?> - <?= e(date('M j, Y', strtotime($dateTo))) ?>.</p>
+    </div>
+</section>
+<style><?= system_report_styles() ?></style>
+<?= render_system_report_document($mainSystemReport, false, ['include_cover' => false]) ?>
 
 <?php render_footer(); ?>

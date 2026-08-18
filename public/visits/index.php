@@ -1,9 +1,8 @@
 <?php
 
 require_once __DIR__ . '/../../app/helpers/view.php';
-require_once __DIR__ . '/../../app/services/VisitWorkflow.php';
+require_once __DIR__ . '/../../app/services/CliniqVisitWorkflow.php';
 require_login();
-ensure_visit_workflow_schema();
 
 $filters = [
     'q' => trim($_GET['q'] ?? ''),
@@ -36,7 +35,7 @@ $buildWhere = function (bool $includeStatus = true) use ($filters): array {
     $params = [];
 
     if ($filters['q'] !== '') {
-        $where[] = "(p.first_name LIKE ? OR p.last_name LIKE ? OR p.student_number LIKE ? OR v.chief_complaint LIKE ? OR v.symptoms LIKE ? OR v.action_taken LIKE ? OR v.visit_purpose LIKE ?)";
+        $where[] = "(p.first_name LIKE ? OR p.last_name LIKE ? OR p.id_number LIKE ? OR v.chief_complaint LIKE ? OR EXISTS (SELECT 1 FROM visit_entries se WHERE se.visit_id = v.visit_id AND se.symptoms LIKE ?) OR v.action_taken LIKE ? OR v.visit_purpose LIKE ?)";
         $like = '%' . $filters['q'] . '%';
         array_push($params, $like, $like, $like, $like, $like, $like, $like);
     }
@@ -52,7 +51,7 @@ $buildWhere = function (bool $includeStatus = true) use ($filters): array {
     }
 
     if ($filters['staff'] !== 'all') {
-        $where[] = 'v.attended_by = ?';
+        $where[] = 'v.attended_by_person_id = ?';
         $params[] = (int) $filters['staff'];
     }
 
@@ -71,16 +70,23 @@ $buildWhere = function (bool $includeStatus = true) use ($filters): array {
 
 [$whereSQL, $params] = $buildWhere();
 
-$countStmt = db()->prepare("SELECT COUNT(*) AS total FROM clinic_visits v JOIN patients p ON p.id = v.patient_id WHERE {$whereSQL}");
+$countStmt = cliniq_visit_db()->prepare("SELECT COUNT(*) AS total FROM visits v JOIN people p ON p.id = v.patient_person_id WHERE {$whereSQL}");
 $countStmt->execute($params);
 $totalRows = (int) $countStmt->fetch()['total'];
 $totalPages = max(1, (int) ceil($totalRows / $perPage));
 
-$stmt = db()->prepare("
-    SELECT v.*, p.first_name, p.last_name, p.student_number, p.course_section, au.name AS attended_by_name
-    FROM clinic_visits v
-    JOIN patients p ON p.id = v.patient_id
-    LEFT JOIN users au ON au.id = v.attended_by
+$stmt = cliniq_visit_db()->prepare("
+    SELECT v.*, v.visit_id AS id, p.first_name, p.last_name, p.id_number,
+           COALESCE(NULLIF(TRIM(CONCAT(pr.program_code, '-', s.year_level, UPPER(s.section))), ''), ed.department_code, 'Patient') AS course_section,
+           TRIM(CONCAT_WS(' ', au.first_name, au.middle_name, au.last_name)) AS attended_by_name
+    FROM visits v
+    JOIN patients pt ON pt.person_id = v.patient_person_id
+    JOIN people p ON p.id = pt.person_id
+    LEFT JOIN students s ON s.person_id = p.id
+    LEFT JOIN programs pr ON pr.id = s.program_id
+    LEFT JOIN school_employees se ON se.person_id = p.id
+    LEFT JOIN departments ed ON ed.id = se.department_id
+    LEFT JOIN people au ON au.id = v.attended_by_person_id
     WHERE {$whereSQL}
     ORDER BY CASE COALESCE(v.status, 'Unaddressed')
         WHEN 'Unaddressed' THEN 0
@@ -96,10 +102,10 @@ $visits = $stmt->fetchAll();
 
 [$statusWhereSQL, $statusParams] = $buildWhere(false);
 $statusCounts = ['all' => 0, 'Unaddressed' => 0, 'Active' => 0, 'Completed' => 0, 'Cancelled' => 0];
-$statusCountQuery = db()->prepare("
+$statusCountQuery = cliniq_visit_db()->prepare("
     SELECT v.status, COUNT(*) AS cnt
-    FROM clinic_visits v
-    JOIN patients p ON p.id = v.patient_id
+    FROM visits v
+    JOIN people p ON p.id = v.patient_person_id
     WHERE {$statusWhereSQL}
     GROUP BY v.status
 ");
@@ -110,16 +116,11 @@ foreach ($statusCountQuery->fetchAll() as $row) {
     $statusCounts['all'] += (int) $row['cnt'];
 }
 
-$staffMembers = db()->query("
-    SELECT DISTINCT u.id, u.name
-    FROM users u
-    JOIN clinic_visits v ON v.attended_by = u.id
-    ORDER BY u.name
-")->fetchAll();
+$staffMembers = cliniq_visit_staff_members();
 
-$purposeRows = db()->query("
+$purposeRows = cliniq_visit_db()->query("
     SELECT DISTINCT visit_purpose
-    FROM clinic_visits
+    FROM visits
     WHERE visit_purpose IS NOT NULL AND visit_purpose <> ''
     ORDER BY visit_purpose
 ")->fetchAll();
@@ -156,10 +157,10 @@ foreach ([
 }
 
 $visitColumns = [
-    ['headerName' => 'Date/Time', 'field' => 'dateTimeHtml', 'cellRenderer' => 'html', 'width' => 150],
-    ['headerName' => 'Patient', 'field' => 'patientHtml', 'cellRenderer' => 'html', 'minWidth' => 230],
+    ['headerName' => 'Date/Time', 'field' => 'dateTimeHtml', 'cellRenderer' => 'html', 'sortField' => 'dateTimeSort', 'sortType' => 'date', 'width' => 150],
+    ['headerName' => 'Patient', 'field' => 'patientHtml', 'cellRenderer' => 'html', 'sortField' => 'patientSort', 'minWidth' => 230],
     ['headerName' => 'Complaint', 'field' => 'complaint', 'minWidth' => 210],
-    ['headerName' => 'Status', 'field' => 'statusHtml', 'cellRenderer' => 'html', 'width' => 145],
+    ['headerName' => 'Status', 'field' => 'statusHtml', 'cellRenderer' => 'html', 'sortField' => 'statusSort', 'sortType' => 'number', 'width' => 145],
     ['headerName' => 'Attended By', 'field' => 'attendedBy', 'minWidth' => 165],
     ['headerName' => 'Open', 'field' => 'actionsHtml', 'cellRenderer' => 'html', 'sortable' => false, 'filter' => false, 'width' => 210],
 ];
@@ -190,10 +191,13 @@ foreach ($visits as $visit) {
 
     $visitRows[] = [
         'rowUrl' => $actionUrl,
+        'dateTimeSort' => $visit['visit_datetime'],
         'dateTimeHtml' => '<p class="text-sm font-bold text-slate-700 mb-0">' . e(date('M d, Y', strtotime($visit['visit_datetime']))) . '</p><p class="text-xs font-bold text-slate-400 mb-0">' . e(date('g:i A', strtotime($visit['visit_datetime']))) . '</p>',
-        'patientHtml' => '<div class="flex items-center gap-3"><div class="avatar ' . e(avatar_color($fullName)) . '">' . e(initials($fullName)) . '</div><div><strong class="text-sm text-slate-800">' . e($fullName) . '</strong><div class="text-xs font-bold text-slate-400">' . e($visit['student_number']) . '</div></div></div>',
+        'patientSort' => trim($visit['last_name'] . ' ' . $visit['first_name']),
+        'patientHtml' => '<div class="flex items-center gap-3"><div class="avatar ' . e(avatar_color($fullName)) . '">' . e(initials($fullName)) . '</div><div><strong class="text-sm text-slate-800">' . e($fullName) . '</strong><div class="text-xs font-bold text-slate-400">' . e($visit['id_number']) . '</div></div></div>',
         'complaint' => $visit['chief_complaint'],
         'statusHtml' => '<span class="badge ' . e(visit_status_badge_class($visitStatus)) . '">' . e($visitStatus) . '</span>',
+        'statusSort' => array_search($visitStatus, ['Unaddressed', 'Active', 'Completed', 'Cancelled'], true),
         'attendedBy' => $visit['attended_by_name'] ?: 'Not yet attended',
         'actionsHtml' => $actionsHtml,
     ];

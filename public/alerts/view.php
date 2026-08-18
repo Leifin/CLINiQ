@@ -6,14 +6,32 @@ require_login();
 ensure_alert_workflow_schema();
 
 $id = (int) ($_GET['id'] ?? 0);
-$stmt = db()->prepare('
-    SELECT a.*, p.first_name, p.last_name, p.student_number, p.course_section, u.name AS resolved_by_name
+$stmt = auth_db()->prepare("
+    SELECT
+        a.*,
+        pe.first_name,
+        pe.last_name,
+        pe.id_number,
+        COALESCE(
+            NULLIF(TRIM(CONCAT(pr.program_code, '-', s.year_level, UPPER(s.section))), ''),
+            ed.department_code,
+            cd.department_code,
+            'Patient'
+        ) AS course_section,
+        TRIM(CONCAT_WS(' ', rb.first_name, rb.middle_name, rb.last_name)) AS resolved_by_name
     FROM nurse_alerts a
-    LEFT JOIN patients p ON p.id = a.patient_id
-    LEFT JOIN users u ON u.id = a.resolved_by
+    LEFT JOIN patients pt ON pt.person_id = a.patient_id
+    LEFT JOIN people pe ON pe.id = pt.person_id
+    LEFT JOIN students s ON s.person_id = pe.id
+    LEFT JOIN programs pr ON pr.id = s.program_id
+    LEFT JOIN school_employees se ON se.person_id = pe.id
+    LEFT JOIN departments ed ON ed.id = se.department_id
+    LEFT JOIN clinic_staff cs ON cs.person_id = pe.id
+    LEFT JOIN departments cd ON cd.id = cs.department_id
+    LEFT JOIN people rb ON rb.id = a.resolved_by
     WHERE a.id = ?
     LIMIT 1
-');
+");
 $stmt->execute([$id]);
 $alert = $stmt->fetch();
 
@@ -90,8 +108,8 @@ render_header('Alert Report');
                 <span class="clinic-label">Linked Patient</span>
                 <strong>
                     <?= e($patientName !== '' ? $patientName : 'Unlisted') ?>
-                    <?php if ($alert['student_number']): ?>
-                        <span class="text-slate-400">&bull;</span> <?= e($alert['student_number']) ?>
+                    <?php if ($alert['id_number']): ?>
+                        <span class="text-slate-400">&bull;</span> <?= e($alert['id_number']) ?>
                     <?php endif; ?>
                 </strong>
             </div>
@@ -114,7 +132,7 @@ render_header('Alert Report');
             <?php if ($photoUrl): ?>
                 <div class="md:col-span-2">
                     <span class="clinic-label">Photo Evidence</span>
-                    <a href="<?= e($photoUrl) ?>" target="_blank" class="block mt-2 rounded-2xl overflow-hidden border border-slate-200 bg-slate-50">
+                    <a href="<?= e($photoUrl) ?>" class="block mt-2 rounded-2xl overflow-hidden border border-slate-200 bg-slate-50" data-file-preview data-preview-type="image" data-preview-title="Alert photo evidence">
                         <img src="<?= e($photoUrl) ?>" alt="Alert report photo" class="w-full max-h-[28rem] object-contain bg-slate-100">
                     </a>
                 </div>

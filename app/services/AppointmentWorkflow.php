@@ -9,34 +9,14 @@ function ensure_appointment_schema(): void
         return;
     }
 
-    $db = db();
-    $stmt = $db->query("SHOW COLUMNS FROM appointments LIKE 'status'");
-    $statusColumn = $stmt->fetch();
-    $type = $statusColumn['Type'] ?? '';
-
-    if (str_starts_with(strtolower((string) $type), 'enum(') && !str_contains($type, "'Pending'")) {
-        $db->exec("ALTER TABLE appointments MODIFY status ENUM('Pending', 'Scheduled', 'Completed', 'Cancelled', 'No Show') NOT NULL DEFAULT 'Pending'");
+    $db = appointment_db();
+    foreach (['appointments', 'appointment_availability_blocks'] as $table) {
+        $stmt = $db->prepare('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?');
+        $stmt->execute([$table]);
+        if ((int) $stmt->fetchColumn() !== 1) {
+            throw new RuntimeException("Required Cliniq_db table {$table} is missing. Run the appointment migration first.");
+        }
     }
-
-    $stmt = $db->query("SHOW COLUMNS FROM appointments LIKE 'cancellation_reason'");
-    if (!$stmt->fetch()) {
-        $db->exec("ALTER TABLE appointments ADD cancellation_reason TEXT NULL AFTER notes");
-    }
-
-    $db->exec("
-        CREATE TABLE IF NOT EXISTS appointment_availability_blocks (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            block_date DATE NOT NULL,
-            start_time TIME NULL,
-            end_time TIME NULL,
-            reason VARCHAR(255) NULL,
-            created_by INT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            INDEX idx_appointment_blocks_date (block_date),
-            FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
-        )
-    ");
 
     $ready = true;
 }
@@ -76,10 +56,51 @@ function appointment_month_bounds(DateTimeImmutable $month): array
 function appointment_blocks_for_month(DateTimeImmutable $month): array
 {
     [$start, $end] = appointment_month_bounds($month);
-    $stmt = db()->prepare("
-        SELECT b.*, u.name AS created_by_name
+    $stmt = appointment_db()->prepare("
+        SELECT b.*, TRIM(CONCAT_WS(' ', creator.first_name, creator.middle_name, creator.last_name)) AS created_by_name
         FROM appointment_availability_blocks b
-        LEFT JOIN users u ON u.id = b.created_by
+        LEFT JOIN people creator ON creator.id = b.created_by_person_id
+        WHERE b.block_date BETWEEN ? AND ?
+        ORDER BY b.block_date ASC, b.start_time IS NULL DESC, b.start_time ASC
+    ");
+    $stmt->execute([$start, $end]);
+
+    $byDate = [];
+    foreach ($stmt->fetchAll() as $block) {
+        $byDate[$block['block_date']][] = $block;
+    }
+
+    return $byDate;
+}
+
+function appointment_week_from_request(?string $value = null): DateTimeImmutable
+{
+    $value = trim((string) $value);
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
+        $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+        if ($date && $date->format('Y-m-d') === $value) {
+            return $date->modify('monday this week')->setTime(0, 0);
+        }
+    }
+
+    return (new DateTimeImmutable('today'))->modify('monday this week')->setTime(0, 0);
+}
+
+function appointment_week_bounds(DateTimeImmutable $week): array
+{
+    $start = $week->modify('monday this week')->setTime(0, 0);
+    $end = $start->modify('+5 days')->setTime(23, 59, 59);
+
+    return [$start->format('Y-m-d'), $end->format('Y-m-d')];
+}
+
+function appointment_blocks_for_week(DateTimeImmutable $week): array
+{
+    [$start, $end] = appointment_week_bounds($week);
+    $stmt = appointment_db()->prepare("
+        SELECT b.*, TRIM(CONCAT_WS(' ', creator.first_name, creator.middle_name, creator.last_name)) AS created_by_name
+        FROM appointment_availability_blocks b
+        LEFT JOIN people creator ON creator.id = b.created_by_person_id
         WHERE b.block_date BETWEEN ? AND ?
         ORDER BY b.block_date ASC, b.start_time IS NULL DESC, b.start_time ASC
     ");
@@ -96,7 +117,7 @@ function appointment_blocks_for_month(DateTimeImmutable $month): array
 function appointment_patient_dates_for_month(int $patientId, DateTimeImmutable $month): array
 {
     [$start, $end] = appointment_month_bounds($month);
-    $stmt = db()->prepare("
+    $stmt = appointment_db()->prepare("
         SELECT DATE(appointment_datetime) AS appointment_date, status, COUNT(*) AS total
         FROM appointments
         WHERE patient_id = ?
@@ -112,6 +133,41 @@ function appointment_patient_dates_for_month(int $patientId, DateTimeImmutable $
     }
 
     return $dates;
+}
+
+function appointment_reserved_times_for_month(DateTimeImmutable $month): array
+{
+    [$start, $end] = appointment_month_bounds($month);
+    $stmt = appointment_db()->prepare("
+        SELECT DATE_FORMAT(appointment_datetime, '%Y-%m-%d') AS appointment_date,
+               TIME_FORMAT(appointment_datetime, '%H:%i:%s') AS appointment_time
+        FROM appointments
+        WHERE appointment_datetime BETWEEN ? AND ?
+          AND status IN ('Pending', 'Scheduled')
+        ORDER BY appointment_datetime ASC
+    ");
+    $stmt->execute([$start . ' 00:00:00', $end . ' 23:59:59']);
+
+    $timesByDate = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $timesByDate[$row['appointment_date']][] = $row['appointment_time'];
+    }
+
+    return $timesByDate;
+}
+
+function appointment_slot_is_reserved(string $appointmentDatetime): bool
+{
+    $stmt = appointment_db()->prepare("
+        SELECT appointment_id
+        FROM appointments
+        WHERE appointment_datetime = ?
+          AND status IN ('Pending', 'Scheduled')
+        LIMIT 1
+    ");
+    $stmt->execute([$appointmentDatetime]);
+
+    return (bool) $stmt->fetchColumn();
 }
 
 function appointment_is_full_day_blocked(array $blocks): bool

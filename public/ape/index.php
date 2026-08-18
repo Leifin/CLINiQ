@@ -9,25 +9,7 @@ $activeQueue = $_GET['queue'] ?? 'all';
 $search = trim($_GET['q'] ?? '');
 $queues = ape_work_queues();
 
-$where = '1=1';
-$params = [];
-if ($search !== '') {
-    $where .= ' AND (p.first_name LIKE ? OR p.last_name LIKE ? OR p.student_number LIKE ? OR p.course_section LIKE ? OR a.document_type LIKE ?)';
-    $term = '%' . $search . '%';
-    array_push($params, $term, $term, $term, $term, $term);
-}
-
-$stmt = db()->prepare("
-    SELECT a.*, p.first_name, p.last_name, p.student_number, p.course_section, u.name AS verified_by_name
-    FROM ape_records a
-    JOIN patients p ON p.id = a.patient_id
-    LEFT JOIN users u ON u.id = a.verified_by
-    WHERE {$where}
-    ORDER BY a.updated_at DESC, a.created_at DESC
-    LIMIT 200
-");
-$stmt->execute($params);
-$allRecords = $stmt->fetchAll();
+$allRecords = ape_fetch_records($search);
 
 $recordsByQueue = array_fill_keys(array_keys($queues), []);
 foreach ($allRecords as $record) {
@@ -39,22 +21,22 @@ $visibleQueues = $activeQueue === 'all'
     : (isset($queues[$activeQueue]) ? [$activeQueue] : array_keys($queues));
 
 $needsAction = 0;
-foreach (['document_review', 'digital_submission', 'follow_up'] as $key) {
+foreach (['examination', 'document_review', 'digital_submission', 'final_decision', 'follow_up'] as $key) {
     $needsAction += count($recordsByQueue[$key]);
 }
 
 $metrics = [
     'total' => count($allRecords),
     'clinic_action' => $needsAction,
-    'digitized' => count($recordsByQueue['digital_submission']) + count($recordsByQueue['follow_up']) + count($recordsByQueue['completed']),
+    'digitized' => count(array_filter($allRecords, static fn(array $record): bool => !empty($record['document_path']))),
     'follow_up' => count($recordsByQueue['follow_up']),
     'completed' => count($recordsByQueue['completed']),
 ];
 $clearanceRate = $metrics['total'] > 0 ? round(($metrics['completed'] / $metrics['total']) * 100) : 0;
 
 // Top bar stats
-$activeStudents = $metrics['total'] - $metrics['completed'];
-$appointmentsStmt = db()->query("SELECT COUNT(*) AS total FROM appointments WHERE DATE(appointment_datetime) = CURDATE()");
+$activePatients = $metrics['total'] - $metrics['completed'];
+$appointmentsStmt = appointment_db()->query("SELECT COUNT(*) AS total FROM appointments WHERE DATE(appointment_datetime) = CURDATE()");
 $appointmentsToday = (int)($appointmentsStmt->fetch()['total'] ?? 0);
 
 $overdueRecords = [];
@@ -66,11 +48,11 @@ foreach ($allRecords as $rec) {
 }
 
 $apeQueueColumns = [
-    ['headerName' => 'Priority', 'field' => 'priorityHtml', 'cellRenderer' => 'html', 'width' => 140],
-    ['headerName' => 'Student', 'field' => 'studentHtml', 'cellRenderer' => 'html', 'minWidth' => 250],
-    ['headerName' => 'Program', 'field' => 'programHtml', 'cellRenderer' => 'html', 'minWidth' => 220],
-    ['headerName' => 'Waiting', 'field' => 'waiting', 'width' => 140],
-    ['headerName' => 'Next Action', 'field' => 'nextActionHtml', 'cellRenderer' => 'html', 'minWidth' => 260],
+    ['headerName' => 'Priority', 'field' => 'priorityHtml', 'cellRenderer' => 'html', 'sortField' => 'prioritySort', 'sortType' => 'number', 'width' => 140],
+    ['headerName' => 'Patient', 'field' => 'studentHtml', 'cellRenderer' => 'html', 'sortField' => 'studentSort', 'minWidth' => 250],
+    ['headerName' => 'Program', 'field' => 'programHtml', 'cellRenderer' => 'html', 'sortField' => 'programSort', 'minWidth' => 220],
+    ['headerName' => 'Waiting', 'field' => 'waiting', 'sortField' => 'waitingSort', 'sortType' => 'number', 'width' => 140],
+    ['headerName' => 'Next Action', 'field' => 'nextActionHtml', 'cellRenderer' => 'html', 'sortField' => 'nextActionSort', 'minWidth' => 260],
     ['headerName' => 'Action', 'field' => 'actionHtml', 'cellRenderer' => 'html', 'sortable' => false, 'filter' => false, 'width' => 210],
 ];
 
@@ -81,8 +63,8 @@ $apeDisplayName = trim((string) ($apeUser['name'] ?? '')) ?: 'Nurse';
 $apeHeaderActions = ''
     . '<div class="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-4 min-w-[140px]">'
     . '<span class="material-symbols-outlined text-slate-400 text-[28px]">group</span>'
-    . '<div><p class="font-headline text-2xl font-extrabold text-[#17261d] leading-none mb-1">' . (int) $activeStudents . '</p>'
-    . '<p class="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Active students</p></div></div>'
+    . '<div><p class="font-headline text-2xl font-extrabold text-[#17261d] leading-none mb-1">' . (int) $activePatients . '</p>'
+    . '<p class="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Active patients</p></div></div>'
     . '<div class="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-4 min-w-[140px]">'
     . '<span class="material-symbols-outlined text-slate-400 text-[28px]">notification_important</span>'
     . '<div><p class="font-headline text-2xl font-extrabold text-[#17261d] leading-none mb-1">' . count($overdueRecords) . '</p>'
@@ -104,7 +86,7 @@ render_clinic_command_header(
 <div class="bg-red-50 border border-red-200 rounded-2xl p-1 mb-8">
     <div class="px-5 py-4 text-red-700 flex items-center gap-2 border-b border-red-100/50">
         <span class="material-symbols-outlined text-[18px]">error</span>
-        <h2 class="font-headline font-extrabold text-sm m-0"><?= count($overdueRecords) ?> student(s) need immediate attention</h2>
+        <h2 class="font-headline font-extrabold text-sm m-0"><?= count($overdueRecords) ?> patient(s) need immediate attention</h2>
     </div>
     <div class="divide-y divide-red-100/50">
         <?php foreach (array_slice($overdueRecords, 0, 5) as $rec): 
@@ -119,7 +101,7 @@ render_clinic_command_header(
                 <div>
                     <h3 class="font-bold text-slate-800 text-base mb-1"><?= e($fullName) ?></h3>
                     <p class="text-xs font-bold text-slate-500 m-0">
-                        <?= e($rec['student_number']) ?> &bull; <?= e($rec['course_section'] ?: 'No course') ?> &bull; <?= e($next['label']) ?> &mdash; <?= strtolower(e($priority['label'])) ?>
+                        <?= e($rec['id_number']) ?> &bull; <?= e($rec['course_section'] ?: 'No course') ?> &bull; <?= e($next['label']) ?> &mdash; <?= strtolower(e($priority['label'])) ?>
                     </p>
                 </div>
                 <div class="flex items-center gap-6 shrink-0">
@@ -141,7 +123,7 @@ render_clinic_command_header(
     <div class="flex flex-col lg:flex-row justify-between gap-4 lg:items-center mb-5">
         <div>
             <h2 class="font-headline text-xl font-extrabold text-[#17261d] mb-1">Work Queue Map</h2>
-            <p class="text-xs font-bold text-slate-500 mb-0">Click a queue to focus the page. Each student shows one next clinic action.</p>
+            <p class="text-xs font-bold text-slate-500 mb-0">Click a queue to focus the page. Each patient shows one next clinic action.</p>
         </div>
     </div>
     <div class="ape-queue-map-grid">
@@ -195,10 +177,15 @@ render_clinic_command_header(
                 $priority = ape_priority_badge($rec);
                 $apeRows[] = [
                     'rowUrl' => 'view.php?id=' . (int)$rec['id'],
+                    'prioritySort' => array_search($priority['label'], ['Overdue', 'Urgent', 'Clinical', 'Waiting', 'Ready', 'Done'], true),
                     'priorityHtml' => '<span class="badge ' . e($priority['class']) . '">' . e($priority['label']) . '</span>',
-                    'studentHtml' => '<div class="flex items-center gap-3"><div class="avatar ' . e(avatar_color($fullName)) . '">' . e(initials($fullName)) . '</div><div><strong class="text-sm text-slate-800">' . e($fullName) . '</strong><div class="text-xs font-bold text-slate-400">' . e($rec['student_number']) . '</div></div></div>',
+                    'studentSort' => trim($rec['last_name'] . ' ' . $rec['first_name']),
+                    'studentHtml' => '<div class="flex items-center gap-3"><div class="avatar ' . e(avatar_color($fullName)) . '">' . e(initials($fullName)) . '</div><div><strong class="text-sm text-slate-800">' . e($fullName) . '</strong><div class="text-xs font-bold text-slate-400">' . e($rec['id_number']) . '</div></div></div>',
+                    'programSort' => $rec['course_section'] ?: '',
                     'programHtml' => '<p class="text-sm font-bold text-slate-700 mb-1">' . e($rec['course_section'] ?: 'No course set') . '</p><p class="text-xs font-bold text-slate-400 mb-0">' . e($rec['document_type'] ?: 'APE documents') . '</p>',
                     'waiting' => ape_waiting_label($rec),
+                    'waitingSort' => ape_waiting_days($rec),
+                    'nextActionSort' => $next['label'],
                     'nextActionHtml' => '<div class="flex items-center gap-2"><span class="material-symbols-outlined text-primary text-[18px]">' . e($next['icon']) . '</span><div><strong class="block text-sm text-slate-800">' . e($next['label']) . '</strong><span class="block text-xs font-bold text-slate-400">' . e(ape_missing_item($rec)) . '</span></div></div>',
                     'actionHtml' => $queueKey === 'completed' ? '' : '<a href="view.php?id=' . (int)$rec['id'] . '" class="btn btn-primary btn-sm text-decoration-none"><span class="material-symbols-outlined text-[14px]">' . e($next['icon']) . '</span>' . e($next['label']) . '</a>',
                 ];
@@ -206,7 +193,7 @@ render_clinic_command_header(
             render_ag_grid('apeGrid' . preg_replace('/[^A-Za-z0-9_-]/', '', $queueKey), $apeQueueColumns, $apeRows, [
                 'pageSize' => $activeQueue === 'all' ? 10 : 25,
                 'height' => 'compact',
-                'emptyTitle' => 'No students here',
+                'emptyTitle' => 'No patients here',
                 'emptyText' => 'This queue is clear for now.',
             ]);
             ?>

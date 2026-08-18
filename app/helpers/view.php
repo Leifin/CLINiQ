@@ -132,7 +132,7 @@ function render_header(string $title): void
     $pendingAlertTitle = 'View pending alerts';
     if ($user) {
         try {
-            $alertSummary = db()->query("
+            $alertSummary = auth_db()->query("
                 SELECT
                     COUNT(*) AS total,
                     SUM(CASE WHEN risk_level = 'Critical' THEN 1 ELSE 0 END) AS critical_total
@@ -143,7 +143,7 @@ function render_header(string $title): void
             $criticalAlertCount = (int) ($alertSummary['critical_total'] ?? 0);
 
             if ($activeAlertCount === 1) {
-                $latestAlert = db()->query("SELECT id FROM nurse_alerts WHERE status = 'Pending' ORDER BY created_at DESC, id DESC LIMIT 1")->fetch();
+                $latestAlert = auth_db()->query("SELECT id FROM nurse_alerts WHERE status = 'Pending' ORDER BY created_at DESC, id DESC LIMIT 1")->fetch();
                 $latestAlertId = (int) ($latestAlert['id'] ?? 0);
                 if ($latestAlertId > 0) {
                     $pendingAlertUrl = app_url('alerts/view.php?id=' . $latestAlertId);
@@ -170,10 +170,16 @@ function render_header(string $title): void
         'Alerts' => ['url' => app_url('alerts/index.php'), 'match' => '/alerts/', 'icon' => 'notification_important'],
         'Inventory' => ['url' => app_url('inventory/index.php'), 'match' => '/inventory/', 'icon' => 'inventory_2'],
         'APE' => ['url' => app_url('ape/index.php'), 'match' => '/ape/', 'icon' => 'description'],
+        'Appointments' => ['url' => app_url('appointments/index.php'), 'match' => '/appointments/', 'icon' => 'calendar_month'],
         'Referrals' => ['url' => app_url('referrals/index.php'), 'match' => '/referrals/', 'icon' => 'send'],
         'Reports' => ['url' => app_url('reports/index.php'), 'match' => '/reports/', 'icon' => 'analytics'],
         'Settings' => ['url' => app_url('settings/index.php'), 'match' => '/settings/', 'icon' => 'settings'],
     ];
+    if (first_registration_pending('staff')) {
+        $nav = [
+            'Dashboard' => $nav['Dashboard'],
+        ];
+    }
     ?>
     <!doctype html>
     <html class="light" lang="en">
@@ -210,7 +216,7 @@ function render_header(string $title): void
         <link rel="stylesheet" href="<?= app_url('assets/vendor/ag-grid/ag-grid.css?v=31') ?>">
         <link rel="stylesheet" href="<?= app_url('assets/vendor/ag-grid/ag-theme-quartz.css?v=31') ?>">
         <script src="<?= app_url('assets/vendor/ag-grid/ag-grid-community.min.js?v=31') ?>"></script>
-        <link href="<?= app_url('assets/css/app.css?v=critical-alert-frame-1') ?>" rel="stylesheet">
+        <link href="<?= app_url('assets/css/app.css?v=file-preview-2') ?>" rel="stylesheet">
         <style>
             :root {
                 --cliniq-primary: <?= e($theme['primary']) ?>;
@@ -241,6 +247,7 @@ function render_header(string $title): void
                 </a>
                 <nav class="app-nav">
                     <?php foreach ($nav as $label => $item): ?>
+                        <?php if (isset($item['roles']) && !in_array($user['role'] ?? '', $item['roles'], true)) continue; ?>
                         <?php $active = str_contains($currentPath, $item['match']); ?>
                         <a href="<?= e($item['url']) ?>" class="app-nav-link <?= $active ? 'active' : '' ?> text-decoration-none" title="<?= e($label) ?>" data-no-ajax="true">
                             <span class="material-symbols-outlined"><?= e($item['icon']) ?></span>
@@ -322,8 +329,9 @@ function render_footer(): void
         </div>
         <?php endif; ?>
     <?php render_flash_toasts(); ?>
-    <script src="<?= app_url('assets/js/app.js?v=settings-link-tabs-1') ?>"></script>
-    <script src="<?= app_url('assets/js/ag-grid-tables.js?v=6') ?>"></script>
+    <script src="<?= app_url('assets/js/app.js?v=drag-scroll-2') ?>"></script>
+    <script src="<?= app_url('assets/js/ag-grid-tables.js?v=timeline-tooltip-1') ?>"></script>
+    <script src="<?= app_url('assets/js/file-preview.js?v=ape-popup-2') ?>"></script>
     </body>
     </html>
     <?php
@@ -334,19 +342,53 @@ function render_footer(): void
  */
 function render_ag_grid(string $gridId, array $columns, array $rows, array $options = []): void
 {
+    $hasRowNumberColumn = false;
+    foreach ($columns as $column) {
+        if (($column['field'] ?? '') === 'rowNumber') {
+            $hasRowNumberColumn = true;
+            break;
+        }
+    }
+    if (!$hasRowNumberColumn) {
+        array_unshift($columns, [
+            'headerName' => 'No.',
+            'field' => 'rowNumber',
+            'width' => 70,
+            'minWidth' => 70,
+            'maxWidth' => 70,
+            'flex' => 0,
+            'suppressSizeToFit' => true,
+            'sortable' => false,
+            'filter' => false,
+        ]);
+    }
+    foreach ($rows as $rowIndex => &$row) {
+        if (!array_key_exists('rowNumber', $row)) {
+            $row['rowNumber'] = $rowIndex + 1;
+        }
+    }
+    unset($row);
+
     $pageSize = $options['pageSize'] ?? 25;
     $height = $options['height'] ?? 'standard';
     $heightClass = match ($height) {
         'compact' => 'cliniq-ag-grid-compact',
         'fill' => 'cliniq-ag-grid-fill',
+        'patient-registry' => 'cliniq-ag-grid-patient-registry',
         default => 'cliniq-ag-grid-standard',
     };
     $searchInput = $options['searchInput'] ?? '';
     $fitColumns = $options['fitColumns'] ?? true;
+    $pagination = !empty($options['pagination']);
+    $paginationControls = (string) ($options['paginationControls'] ?? '');
+    $rowHeight = max(40, (int) ($options['rowHeight'] ?? 70));
 
     echo '<div id="' . e($gridId) . '" class="cliniq-ag-grid ag-theme-quartz ' . $heightClass . '" data-ag-grid ' .
          ($searchInput ? 'data-search-input="' . e($searchInput) . '" ' : '') .
+         ($paginationControls ? 'data-pagination-controls="' . e($paginationControls) . '" ' : '') .
          ($fitColumns ? 'data-fit-columns="true" ' : 'data-fit-columns="false" ') .
+         ($pagination ? 'data-pagination="true" ' : 'data-pagination="false" ') .
+         'data-row-height="' . $rowHeight . '" ' .
          'data-page-size="' . (int)$pageSize . '" ' .
          'data-empty-title="' . e($options['emptyTitle'] ?? '') . '" ' .
          'data-empty-text="' . e($options['emptyText'] ?? '') . '">';
